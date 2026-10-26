@@ -287,8 +287,14 @@
               Module.FS.writeFile("default.cfg", cfg);
             },
           ],
-          onRuntimeInitialized: () =>
-            callMain(["-iwad", WAD, "-window", "-nogui", "-nomusic", "-config", "default.cfg"]),
+          onRuntimeInitialized: () => {
+            callMain(["-iwad", WAD, "-window", "-nogui", "-nomusic", "-config", "default.cfg"]);
+            // open on the main menu (new game, options...) rather than waiting for a key press
+            setTimeout(() => {
+              send("keydown", "Escape");
+              setTimeout(() => send("keyup", "Escape"), 100);
+            }, 500);
+          },
           print: (t) => console.log(t),
           printErr: (t) => console.warn(t),
           setStatus: () => {},
