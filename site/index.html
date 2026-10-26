@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>DOOM</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+        color: #e8e2d8;
+        font: 600 14px/1.3 ui-monospace, Menlo, Consolas, monospace;
+        letter-spacing: 0.08em;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      /* the game scales to fit, keeping its shape */
+      #canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        image-rendering: pixelated;
+        outline: none;
+      }
+      #screen {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        padding: 16px;
+        text-align: center;
+        background: #000;
+      }
+      #screen h1 {
+        margin: 0;
+        font-size: 44px;
+        letter-spacing: 0.12em;
+        color: #d23c2a;
+        text-shadow: 3px 3px 0 #4a0f08;
+      }
+      #bar {
+        width: min(320px, 80%);
+        height: 12px;
+        padding: 2px;
+        border: 2px solid #e8e2d8;
+      }
+      #fill {
+        width: 0;
+        height: 100%;
+        background: #d23c2a;
+      }
+      #play {
+        display: none;
+        padding: 10px 22px;
+        font: inherit;
+        font-size: 18px;
+        color: #000;
+        background: #e8e2d8;
+        border: 0;
+        cursor: pointer;
+      }
+      #keys {
+        max-width: 420px;
+        opacity: 0.7;
+        font-size: 12px;
+      }
+      /* on-screen controls for phones and tablets */
+      #touch {
+        display: none;
+      }
+      .touch #touch {
+        display: block;
+      }
+      .touch #keys {
+        display: none;
+      }
+      .btn {
+        position: absolute;
+        display: grid;
+        place-items: center;
+        width: 58px;
+        height: 58px;
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.12);
+        border: 2px solid rgba(255, 255, 255, 0.35);
+        border-radius: 12px;
+      }
+      .btn.down {
+        background: rgba(210, 60, 42, 0.55);
+      }
+      .round {
+        border-radius: 50%;
+      }
+      .small {
+        width: 54px;
+        height: 32px;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+
+    <div id="touch" aria-hidden="true">
+      <div class="btn" data-key="ArrowUp" style="left: 80px; bottom: 136px">▲</div>
+      <div class="btn" data-key="ArrowLeft" style="left: 16px; bottom: 76px">◀</div>
+      <div class="btn" data-key="ArrowRight" style="left: 144px; bottom: 76px">▶</div>
+      <div class="btn" data-key="ArrowDown" style="left: 80px; bottom: 16px">▼</div>
+      <div class="btn round" data-key="Space" style="right: 16px; bottom: 60px; width: 76px; height: 76px">FIRE</div>
+      <div class="btn round" data-key="KeyE" style="right: 104px; bottom: 16px">USE</div>
+      <div class="btn small" data-key="Escape" style="left: 16px; top: 12px">MENU</div>
+      <div class="btn small" data-key="Enter" style="left: 78px; top: 12px">OK</div>
+      <div class="btn small" data-key="Tab" style="right: 16px; top: 12px">MAP</div>
+    </div>
+
+    <div id="screen">
+      <h1>DOOM</h1>
+      <div id="status">LOADING 0%</div>
+      <div id="bar"><div id="fill"></div></div>
+      <button id="play" type="button">CLICK TO PLAY</button>
+      <div id="keys">ARROWS / WASD MOVE · SPACE FIRE · E USE · SHIFT RUN · 1–7 WEAPONS · ESC MENU</div>
+    </div>
+
+    <script>
+      // Freedoom 1 played on Chocolate Doom (Cloudflare's doom-wasm build). The level data is fetched once with a
+      // progress bar and kept in the browser's cache storage, so the next visit starts straight away.
+      const WAD = "freedoom1.wad";
+      const CACHE = "doom-freedoom-0.13.0";
+      const touch = matchMedia("(pointer: coarse)").matches;
+      if (touch) document.body.classList.add("touch");
+      document.getElementById("play").textContent = touch ? "TAP TO PLAY" : "CLICK TO PLAY";
+
+      const status = (t) => (document.getElementById("status").textContent = t);
+      const bar = (f) => (document.getElementById("fill").style.width = `${Math.round(f * 100)}%`);
+
+      async function fetchWad() {
+        let cache = null;
+        try {
+          cache = await caches.open(CACHE);
+          const hit = await cache.match(WAD);
+          if (hit) return new Uint8Array(await hit.arrayBuffer());
+        } catch {}
+        const res = await fetch(WAD);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const total = Number(res.headers.get("content-length")) || 28_592_816;
+        const reader = res.body.getReader();
+        const parts = [];
+        let got = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          parts.push(value);
+          got += value.length;
+          bar(Math.min(1, got / total));
+          status(`LOADING ${Math.min(100, Math.round((got / total) * 100))}%`);
+        }
+        const data = new Uint8Array(got);
+        let at = 0;
+        for (const p of parts) data.set(p, (at += p.length) - p.length);
+        try {
+          await cache?.put(WAD, new Response(data));
+        } catch {}
+        return data;
+      }
+
+      // Key presses for the game, by the browser's key codes. The touch buttons and the W/S keys send these.
+      const KEYS = {
+        ArrowUp: ["ArrowUp", 38],
+        ArrowDown: ["ArrowDown", 40],
+        ArrowLeft: ["ArrowLeft", 37],
+        ArrowRight: ["ArrowRight", 39],
+        Space: [" ", 32],
+        KeyE: ["e", 69],
+        Escape: ["Escape", 27],
+        Enter: ["Enter", 13],
+        Tab: ["Tab", 9],
+      };
+      function send(type, code) {
+        const [key, keyCode] = KEYS[code];
+        const e = new KeyboardEvent(type, { key, code, bubbles: true, cancelable: true });
+        Object.defineProperty(e, "keyCode", { get: () => keyCode });
+        Object.defineProperty(e, "which", { get: () => keyCode });
+        document.dispatchEvent(e);
+      }
+
+      // W and S walk like the up and down arrows (Doom only has one key for each)
+      const WALK = { KeyW: "ArrowUp", KeyS: "ArrowDown" };
+      for (const type of ["keydown", "keyup"])
+        window.addEventListener(
+          type,
+          (e) => {
+            if (!e.isTrusted || !WALK[e.code]) return;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            if (!e.repeat) send(type, WALK[e.code]);
+          },
+          true
+        );
+
+      for (const b of document.querySelectorAll("#touch .btn")) {
+        const up = () => {
+          if (!b.classList.contains("down")) return;
+          b.classList.remove("down");
+          send("keyup", b.dataset.key);
+        };
+        b.addEventListener("pointerdown", (e) => {
+          e.preventDefault();
+          b.setPointerCapture(e.pointerId);
+          b.classList.add("down");
+          send("keydown", b.dataset.key);
+        });
+        b.addEventListener("pointerup", up);
+        b.addEventListener("pointercancel", up);
+      }
+
+      function start(wad, cfg) {
+        document.getElementById("screen").style.display = "none";
+        const canvas = document.getElementById("canvas");
+        window.Module = {
+          canvas,
+          noInitialRun: true,
+          preRun: [
+            () => {
+              Module.FS.writeFile(WAD, wad);
+              Module.FS.writeFile("default.cfg", cfg);
+            },
+          ],
+          onRuntimeInitialized: () =>
+            callMain(["-iwad", WAD, "-window", "-nogui", "-nomusic", "-config", "default.cfg"]),
+          print: (t) => console.log(t),
+          printErr: (t) => console.warn(t),
+          setStatus: () => {},
+        };
+        const s = document.createElement("script");
+        s.src = "websockets-doom.js";
+        document.body.appendChild(s);
+        canvas.focus();
+      }
+
+      (async () => {
+        try {
+          const [wad, cfg] = await Promise.all([fetchWad(), fetch("default.cfg").then((r) => r.text())]);
+          bar(1);
+          status("READY");
+          const play = document.getElementById("play");
+          play.style.display = "block";
+          // the click also lets the browser start the game's sound
+          play.addEventListener("click", () => start(wad, cfg), { once: true });
+        } catch (err) {
+          status(`COULDN'T LOAD THE GAME (${err.message})`);
+        }
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,85 @@
+# Builds Doom for the browser from Cloudflare's doom-wasm source, adds the official Freedoom release, and publishes
+# the page to GitHub Pages. Nothing prebuilt is committed here: every file on the site comes out of this run.
+name: Build and publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # cloudflare/doom-wasm (Chocolate Doom compiled to WebAssembly), pinned to one commit
+  DOOM_WASM_SHA: 65e0d3ae2ffa604155eebd96ed40da6567bd08f4
+  # the Emscripten release current when that code was written
+  EMSDK_VERSION: 2.0.20
+  FREEDOOM_VERSION: 0.13.0
+  # from Freedoom's signed freedoom-0.13.0-CHECKSUM file
+  FREEDOOM_SHA256: 3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the doom-wasm source
+        uses: actions/checkout@v4
+        with:
+          repository: cloudflare/doom-wasm
+          ref: ${{ env.DOOM_WASM_SHA }}
+          path: doom-wasm
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+
+      # The only changes to Cloudflare's build: switch off the memory-safety debug checks (SAFE_HEAP and the stack
+      # check slow the game down a lot) and the source map, which a player never needs. The game code is untouched.
+      - name: Build
+        working-directory: doom-wasm
+        run: |
+          sed -i -e 's/-s SAFE_HEAP=1/-s SAFE_HEAP=0/' -e 's/-s STACK_OVERFLOW_CHECK=1/-s STACK_OVERFLOW_CHECK=0/' \
+            -e 's/-gsource-map //' -e 's/ --source-map-base \///' configure.ac
+          grep -n '^EMFLAGS' configure.ac
+          ./scripts/build.sh
+          ls -la src/*doom*
+
+      - name: Get Freedoom
+        run: |
+          curl -fsSLo freedoom.zip "https://github.com/freedoom/freedoom/releases/download/v${FREEDOOM_VERSION}/freedoom-${FREEDOOM_VERSION}.zip"
+          echo "${FREEDOOM_SHA256}  freedoom.zip" | sha256sum -c -
+          unzip -q freedoom.zip
+
+      - name: Put the site together
+        run: |
+          mkdir -p _site
+          cp site/* _site/
+          cp doom-wasm/src/websockets-doom.js doom-wasm/src/websockets-doom.wasm _site/
+          cp "freedoom-${FREEDOOM_VERSION}/freedoom1.wad" _site/
+          cp doom-wasm/COPYING.md _site/COPYING.md
+          cp "freedoom-${FREEDOOM_VERSION}/COPYING.txt" _site/FREEDOOM-COPYING.txt
+          ls -la _site
+
+      - uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
